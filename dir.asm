@@ -16,8 +16,8 @@
 ;   6 - sort on date        -d
 ;   7 - sort on name        -n
 
-include    bios.inc
-include    kernel.inc
+include    ../bios.inc
+include    ../kernel.inc
 
            org     8000h
            lbr     0ff00h
