@@ -6,6 +6,13 @@
 ; *** without express written permission from the author.         ***
 ; *******************************************************************
 
+.op "PUSH","N","9$1 73 8$1 73"
+.op "POP","N","60 72 A$1 F0 B$1"
+.op "CALL","W","D4 H1 L1"
+.op "RTN","","D5"
+.op "MOV","NR","9$2 B$1 8$2 A$1"
+.op "MOV","NW","F8 H2 B$1 F8 L2 A$1"
+
 ; Mode bits:
 ;   0 - 0=short display
 ;       1=long display      -l    (shows date and size)
@@ -19,21 +26,9 @@
 include    ../bios.inc
 include    ../kernel.inc
 
-           org     8000h
-           lbr     0ff00h
-           db      'dir',0
-           dw      9000h
-           dw      endrom+7000h
-           dw      2000h
-           dw      endrom-2000h
-           dw      2000h
-           db      0
-
            org     2000h
-           br      start
-
-include    date.inc
-include    build.inc
+begin:     br      start
+           eever
            db      'Written by Michael H. Riley',0
 
 start:     mov     rf,next             ; point to dirents pointer
@@ -138,7 +133,7 @@ dirloop:   ldi     0                   ; need to read 32 bytes
            bnz     dirgood
            lda     rf                  ; check for good entry
            bnz     dirgood
-           br      dirloop             ; not a valid entry, loop back
+           lbr     dirloop             ; not a valid entry, loop back
 ; *************************************************************
 ; *** Good entry found, copy needed data to dirents storage ***
 ; *************************************************************
@@ -369,7 +364,8 @@ short:     pop     rf                  ; recover dirents position
 
 complete:  sep     scall               ; final cr/lf
            dw      docrlf
-return:    sep     sret                ; return to os
+return:    ldi     0
+           sep     sret                ; return to os
 
 
 
@@ -729,7 +725,7 @@ size_lp:   lda     r8                  ; load next byte
            bz      size_dn             ; jump if found end
            inc     r9                  ; increment count
            inc     r7                  ; and terminal position
-           br      size_lp             ; keep going til end found
+           lbr     size_lp             ; keep going til end found
 size_dn:   inc     r9                  ; accomodate a trailing space
            glo     r7                  ; get terminal position
            smi     79                  ; see if off end
@@ -764,13 +760,13 @@ notdir:    ldi     ' '                 ; trailing space
            dw      docrlf
            ldi     0                   ; set new terminal width
            plo     r7
-           br      dirloop             ; loop back for next entry
+           lbr     dirloop             ; loop back for next entry
 term_lp:   glo     r7                  ; get terminal width
            ani     15                  ; uses 16 as tabstop
            bnz     notdir              ; jump if not at tabstop
            ldn     rb                  ; get mode
            bnz     long                ; jump if long mode
-           br      dirloop             ; loop for next entry
+           lbr     dirloop             ; loop for next entry
 long:      ldi     low buffer          ; point to directory entry
            adi     7                   ; date field
            plo     ra
@@ -1174,8 +1170,11 @@ next:      dw      0                   ; where to store dirents pointer
 
 endrom:    equ     $
 
+.suppress
+
 buffer:    ds      32
 buffer2:   ds      64
 dirents:   db      0
 
+           end     begin
 
