@@ -1,1180 +1,1076 @@
-; *******************************************************************
-; *** This software is copyright 2004 by Michael H Riley          ***
-; *** You have permission to use, modify, copy, and distribute    ***
-; *** this software so long as this copyright notice is retained. ***
-; *** This software may not be used in commercial applications    ***
-; *** without express written permission from the author.         ***
-; *******************************************************************
 
-.op "PUSH","N","9$1 73 8$1 73"
-.op "POP","N","60 72 A$1 F0 B$1"
-.op "CALL","W","D4 H1 L1"
-.op "RTN","","D5"
-.op "MOV","NR","9$2 B$1 8$2 A$1"
-.op "MOV","NW","F8 H2 B$1 F8 L2 A$1"
-
-; Mode bits:
-;   0 - 0=short display
-;       1=long display      -l    (shows date and size)
-;   1 - 1=show hidden files
-;   3 - 1=sort
-;   4 - 1=descending        -r
-;   5 - sort on size        -s
-;   6 - sort on date        -d
-;   7 - sort on name        -n
-
-include    ../bios.inc
-include    ../kernel.inc
-
-           org     2000h
-begin:     br      start
-           eever
-           db      'Written by Michael H. Riley',0
-
-start:     mov     rf,next             ; point to dirents pointer
-           mov     r7,dirents          ; dirents storage
-           ldi     0                   ; terminate list
-           str     r7
-           ghi     r7                  ; store pointer
-           str     rf
-           inc     rf
-           glo     r7
-           str     rf
-           ldi     high crlf           ; display a cr/lf
-           phi     rf
-           ldi     low crlf
-           plo     rf
-           sep     scall
-           dw      o_msg
-           ghi     ra
-           phi     rf
-           glo     ra
-           plo     rf
-           ldi     0                   ; clear all modes
-           plo     r9
-sw_lp:     sep     scall               ; move past leading whitespace
-           dw      f_ltrim
-           ldn     rf                  ; check for switches
-           smi     '-'                 ; which begin with -
-           bnz     no_sw               ; jump if no switches
-           inc     rf                  ; move to switch char
-           lda     rf                  ; retrieve switch
-           plo     re                  ; save it
-           smi     'l'                 ; check for long mode
-           lbnz    not_l               ; ignore others
-           glo     r9                  ; get modes
-           ori     1                   ; set long mode
-           plo     r9                  ; and put it back
-           lbr     sw_lp               ; loop back for more switches
-not_l:     glo     re                  ; recover byte
-           smi     'r'                 ; check for reverse sort
-           lbnz    not_r               ; jump if not
-           glo     r9                  ; get modes
-           ori     010h                ; signal reverse sort
-           plo     r9
-           lbr     sw_lp               ; loop back for more switches
-not_r:     glo     re                  ; recover character
-           smi     's'                 ; check for sort on size
-           lbnz    not_s               ; jump if not
-           glo     r9                  ; get modes
-           ori     028h                ; turn on sort by size
-           plo     r9
-           lbr     sw_lp               ; loop back for more
-not_s:     glo     re                  ; recover byte
-           smi     'd'                 ; check for sort on date
-           lbnz    not_d
-           glo     r9                  ; get modes
-           ori     048h                ; turn on sort by date
-           plo     r9                  ; store it back
-           lbr     sw_lp               ; check for more switches
-not_d:     glo     re                  ; recover character
-           smi     'n'                 ; check sort by name
-           lbnz    not_n               ; if not, then not a valid switch
-           glo     r9                  ; get modes
-           ori     088h                ; turn on sort by name
-           plo     r9
-           lbr     sw_lp               ; loop back for more switches
-not_n:     glo     re                  ; recover character
-           smi     'h'                 ; check show hidden files
-           lbnz    sw_lp               ; if not, then not a valid switch
-           glo     r9                  ; get modes
-           ori     02h                 ; turn on show hidden files
-           plo     r9
-           lbr     sw_lp               ; loop back for more switches
-no_sw:     mov     rb,mode             ; point to modes variable
-           glo     r9                  ; get modes
-           str     rb                  ; and save them
-           sep     scall               ; open the directory
-           dw      o_opendir
-           ldi     0                   ; setup line counter
-           plo     r7
-dirloop:   ldi     0                   ; need to read 32 bytes
-           phi     rc
-           ldi     32
-           plo     rc
-           ldi     high buffer         ; setup transfer buffer
-           phi     rf
-           ldi     low buffer
-           plo     rf
-           sep     scall               ; read files from dir
-           dw      o_read
-           glo     rc                  ; see if eof was hit
-           smi     32
-           lbnz    dirdone             ; jump if done
-           ldi     high buffer         ; setup transfer buffer
-           phi     rf
-           ldi     low buffer
-           plo     rf
-           lda     rf                  ; check for good entry
-           bnz     dirgood
-           lda     rf                  ; check for good entry
-           bnz     dirgood
-           lda     rf                  ; check for good entry
-           bnz     dirgood
-           lda     rf                  ; check for good entry
-           bnz     dirgood
-           lbr     dirloop             ; not a valid entry, loop back
-; *************************************************************
-; *** Good entry found, copy needed data to dirents storage ***
-; *************************************************************
-dirgood:   mov     rf,buffer+6         ; point to flags byte
-           ldn     rf                  ; retrieve it
-           ani     8                   ; check hidden bit
-           lbz     nothidden           ; jump if file is not hidden
-           mov     rf,mode             ; point to modes
-           ldn     rf                  ; retrieve modes
-           ani     2                   ; see if show hidden is on
-           lbnz    nothidden           ; show if -h was specified
-           lbr     dirloop             ; otherwise do not show it
-
-nothidden: mov     rf,next             ; need to retrieve next pointer
-           lda     rf                  ; put into rc
-           phi     rc
-           ldn     rf
-           plo     rc                  ; rc now points to blank space in dirents
-           mov     rf,buffer+12        ; point to filename
-           ldi     19                  ; 20 bytes per filename
-           plo     re
-namelp:    lda     rf                  ; get next byte from name
-           lbz     namedn              ; jump if name is done
-           str     rc                  ; store into dirents storage
-           inc     rc
-           dec     re                  ; decrement count
-           glo     re                  ; check count
-           lbnz    namelp              ; loop until all bytes copied
-namedn:    mov     rf,buffer+6         ; point to flags byte
-           ldn     rf                  ; get flags
-           ani     1                   ; see if file is a directory
-           lbz     namedn3             ; jump if not
-           ldi     '/'                 ; store directory marker
-           str     rc
-           inc     rc
-           dec     re
-namedn3:   glo     re                  ; see if have full 20 bytes
-           lbz     namedn2             ; jump if so
-           ldi     ' '                 ; otherwise add a space
-           str     rc
-           inc     rc
-           dec     re                  ; decrement count
-           lbr     namedn3             ; loop until have 20 byte name
-namedn2:   ldi     0                   ; write a string terminator
-           str     rc
-           inc     rc
-           inc     rc
-           mov     rf,buffer+6         ; copy the 5 bytes of the flags and date/time
-           lda     rf
-           str     rc
-           inc     rc
-           lda     rf
-           str     rc
-           inc     rc
-           lda     rf
-           str     rc
-           inc     rc
-           lda     rf
-           str     rc
-           inc     rc
-           lda     rf
-           str     rc
-           inc     rc
-; *************************************************
-; *** Necessary DIRENT data has now been copied ***
-; *** Next get file size                        ***
-; *************************************************
-           push    r7
-           push    r8
-           push    rc
-           sep     scall               ; get file size
-           dw      getsize
-           pop     rc
-           ghi     r8                  ; store into record
-           str     rc
-           inc     rc
-           glo     r8
-           str     rc
-           inc     rc
-           ghi     r7
-           str     rc
-           inc     rc
-           glo     r7
-           str     rc
-           inc     rc
-           pop     r8
-           pop     r7
-; ***********************
-; *** Done with entry ***
-; ***********************
-           ldi     0                   ; write terminator into list
-           str     rc
-           mov     rf,next             ; save new pointer
-           ghi     rc
-           str     rf
-           inc     rf
-           glo     rc
-           str     rf
-           lbr     dirloop             ; keep reading entries
-
-; **************************************************************************
-; *** Done reading directory, now it needs to be processed and displayed ***
-; **************************************************************************
-dirdone:   sep     scall               ; close the directory
-           dw      o_close
-
-           mov     rf,mode             ; point to mode
-           ldn     rf                  ; recover mode
-           plo     rb                  ; save it here
-           ani     08h                 ; is sorting turned on
-           lbz     display             ; jump if not 
-           glo     rb                  ; recover modes
-           ani     080h                ; check for name sort
-           lbnz    name                ; jump if so
-           glo     rb                  ; recover modes
-           ani     020h                ; check for size sort
-           lbnz    sortsize
-           glo     rb                  ; recover modes
-           ani     040h                ; check for date sort
-           lbnz    sortdate
-           lbr     display
-
-sortdate:  glo     rb                  ; get mode
-           ani     010h                ; see if reverse
-           lbnz    daterev             ; jump if reverse name sort
-           sep     scall               ; sort by name ascending
-           dw      sortda
-           lbr     display
-daterev:   sep     scall               ; sort by name descending
-           dw      sortdd
-           lbr     display
-
-sortsize:  glo     rb                  ; get mode
-           ani     010h                ; see if reverse
-           lbnz    sizerev             ; jump if reverse name sort
-           sep     scall               ; sort by name ascending
-           dw      sortsa
-           lbr     display
-sizerev:   sep     scall               ; sort by name descending
-           dw      sortsd
-           lbr     display
-
-name:      glo     rb                  ; get mode
-           ani     010h                ; see if reverse
-           lbnz    namerev             ; jump if reverse name sort
-           sep     scall               ; sort by name ascending
-           dw      sortna
-           lbr     display
-namerev:   sep     scall               ; sort by name descending
-           dw      sortnd
-           lbr     display
+;  Copyright 2023, David S. Madole <david@madole.net>
+;
+;  This program is free software: you can redistribute it and/or modify
+;  it under the terms of the GNU General Public License as published by
+;  the Free Software Foundation, either version 3 of the License, or
+;  (at your option) any later version.
+;
+;  This program is distributed in the hope that it will be useful,
+;  but WITHOUT ANY WARRANTY; without even the implied warranty of
+;  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;  GNU General Public License for more details.
+;
+;  You should have received a copy of the GNU General Public License
+;  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+          ; Definition files
 
-display:   mov     rf,dirents          ; point to dirents storage
-           ldi     4                   ; setup counter
-           plo     rc
-displp:    ldn     rf                  ; see if done with list
-           lbz     complete            ; jump if done
-           push    rf                  ; save position
-           sep     scall               ; display current filename
-           dw      o_msg
-           glo     rb                  ; get mode byte
-           shr                         ; shift long/short into df
-           lbdf    longdsp             ; jump if long display
-           dec     rc                  ; decrement counter
-           glo     rc                  ; see if zero
-           lbnz    short               ; jump if not
-           sep     scall               ; do a cr/lf
-           dw      o_inmsg
-           db      10,13,0
-           ldi     4                   ; reset counter
-           plo     rc
-           lbr     short
-longdsp:   pop     rf
-           push    rf                  ; save position
-           push    rf
-           glo     rf                  ; point to flags/date/time
-           adi     21
-           plo     ra
-           ghi     rf
-           adci    0
-           phi     ra
-
-           lda     ra                  ; get flags
-           ani     2                   ; is file executable
-           lbz     longdsp2            ; jump if not
-           sep     scall               ; show as executable
-           dw      o_inmsg
-           db      '* ',0
-           lbr     longdsp3
-longdsp2:  sep     scall               ; non executable
-           dw      o_inmsg
-           db      '  ',0
-longdsp3:  mov     rf,buffer           ; point to buffer
-           sep     scall               ; convert datetime
-           dw      datetime
-           mov     rf,buffer           ; point back to buffer
-           sep     scall               ; and display it
-           dw      o_msg
-           pop     rf                  ; recover dirent pointer
-           glo     rf                  ; move to size
-           adi     26
-           plo     rf
-           ghi     rf
-           adci    0
-           phi     rf
-           lda     rf                  ; retrieve size into r7:r8
-           phi     r7
-           lda     rf
-           plo     r7
-           lda     rf
-           phi     r8
-           lda     rf
-           plo     r8
-           sep     scall               ; display the size
-           dw      itoa
-           sep     scall               ; display cr/lf
-           dw      docrlf
-short:     pop     rf                  ; recover dirents position
-           glo     rf                  ; point to next entry
-           adi     30
-           plo     rf
-           ghi     rf
-           adci    0
-           phi     rf
-           lbr     displp              ; loop until all displayed
-
-complete:  sep     scall               ; final cr/lf
-           dw      docrlf
-return:    ldi     0
-           sep     sret                ; return to os
+          #include include/bios.inc
+          #include include/kernel.inc
 
 
+          ; Executable header block
 
-; ***********************************
-; *** Sort list by name ascending ***
-; ***********************************
-sortna:    mov     rf,dirents          ; point to dirents storage
-           ldn     rf                  ; get byte
-           lbz     return              ; no sort if no entries
-           mov     rd,dirents+30       ; point to second entry
-           ldn     rd                  ; get byte
-           lbz     return              ; return if only 1 entry
-sortna1:   ldi     0                   ; zero flag
-           plo     r7                  ; store it
-sortna2:   ldn     rd                  ; get byte from next entry
-           lbz     sortna3             ; jump if end of list
-           push    rf                  ; save indexes
-           push    rd
-           sep     scall               ; compare strings
-           dw      f_strcmp
-           phi     r7                  ; save result
-           pop     rd                  ; recover indexes
-           pop     rf
-           ghi     r7                  ; get compare result
-           smi     1                   ; was string1 > string2
-           lbnz    sortna4             ; jump if not
-           ldi     1                   ; signal a swap happened
-           plo     r7
-           sep     scall               ; swap the two entries
-           dw      swap
-sortna4:   mov     rf,rd               ; point first to second
-           glo     rd                  ; add 30 to second
-           adi     30
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           lbr     sortna2             ; loop to check next entry
-sortna3:   glo     r7                  ; get flag
-           lbnz    sortna              ; jump if entries were changed
-           sep     sret                ; otherwise return to caller
+            org   1ffah
+            dw    begin
+            dw    end-begin
+            dw    begin
 
-; ************************************
-; *** Sort list by name descending ***
-; ************************************
-sortnd:    mov     rf,dirents          ; point to dirents storage
-           ldn     rf                  ; get byte
-           lbz     return              ; no sort if no entries
-           mov     rd,dirents+30       ; point to second entry
-           ldn     rd                  ; get byte
-           lbz     return              ; return if only 1 entry
-sortnd1:   ldi     0                   ; zero flag
-           plo     r7                  ; store it
-sortnd2:   ldn     rd                  ; get byte from next entry
-           lbz     sortnd3             ; jump if end of list
-           push    rf                  ; save indexes
-           push    rd
-           sep     scall               ; compare strings
-           dw      f_strcmp
-           phi     r7                  ; save result
-           pop     rd                  ; recover indexes
-           pop     rf
-           ghi     r7                  ; get compare result
-           smi     0ffh                ; was string1 < string2
-           lbnz    sortnd4             ; jump if not
-           ldi     1                   ; signal a swap happened
-           plo     r7
-           sep     scall               ; swap the two entries
-           dw      swap
-sortnd4:   mov     rf,rd               ; point first to second
-           glo     rd                  ; add 30 to second
-           adi     30
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           lbr     sortnd2             ; loop to check next entry
-sortnd3:   glo     r7                  ; get flag
-           lbnz    sortnd              ; jump if entries were changed
-           sep     sret                ; otherwise return to caller
-           
+begin:      br    skipini
 
-; ***********************************
-; *** Sort list by size ascending ***
-; ***********************************
-sortsa:    mov     rf,dirents          ; point to dirents storage
-           ldn     rf                  ; get byte
-           lbz     return              ; no sort if no entries
-           mov     rd,dirents+30       ; point to second entry
-           ldn     rd                  ; get byte
-           lbz     return              ; return if only 1 entry
-sortsa1:   ldi     0                   ; zero flag
-           plo     r7                  ; store it
-sortsa2:   ldn     rd                  ; get byte from next entry
-           lbz     sortsa3             ; jump if end of list
-           push    rf                  ; save indexes
-           push    rd
-           glo     rf                  ; point to size field
-           adi     26
-           plo     rf
-           ghi     rf
-           adci    0
-           phi     rf
-           glo     rd                  ; point to size field
-           adi     26
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           ldi     4                   ; need to compare 4 bytes
-           plo     re
-sortsal1:  lda     rd                  ; get second number
-           str     r2                  ; store for subtract
-           lda     rf                  ; byte from first number
-           sd                          ; subtract
-           lbnf    sortsans            ; jump if need swap
-           lbnz    sortsano            ; not zero means done
-           dec     re                  ; decrement count
-           glo     re                  ; get count
-           lbnz    sortsal1            ; jump if more to check
-sortsano:  pop     rd                  ; recover positions
-           pop     rf
-           lbr     sortsa4             ; and then move on
-sortsans:  pop     rd                  ; recover positions
-           pop     rf
-           ldi     1                   ; signal a swap happened
-           plo     r7
-           sep     scall               ; swap the two entries
-           dw      swap
-sortsa4:   mov     rf,rd               ; point first to second
-           glo     rd                  ; add 30 to second
-           adi     30
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           lbr     sortsa2             ; loop to check next entry
-sortsa3:   glo     r7                  ; get flag
-           lbnz    sortsa              ; jump if entries were changed
-           sep     sret                ; otherwise return to caller
+            db    11+80h
+            db    5
+            dw    2024
+            dw    2
 
-; ************************************
-; *** Sort list by size descending ***
-; ************************************
-sortsd:    mov     rf,dirents          ; point to dirents storage
-           ldn     rf                  ; get byte
-           lbz     return              ; no sort if no entries
-           mov     rd,dirents+30       ; point to second entry
-           ldn     rd                  ; get byte
-           lbz     return              ; return if only 1 entry
-sortsd1:   ldi     0                   ; zero flag
-           plo     r7                  ; store it
-sortsd2:   ldn     rd                  ; get byte from next entry
-           lbz     sortsd3             ; jump if end of list
-           push    rf                  ; save indexes
-           push    rd
-           glo     rf                  ; point to size field
-           adi     26
-           plo     rf
-           ghi     rf
-           adci    0
-           phi     rf
-           glo     rd                  ; point to size field
-           adi     26
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           ldi     4                   ; need to compare 4 bytes
-           plo     re
-sortsdl1:  lda     rd                  ; get second number
-           str     r2                  ; store for subtract
-           lda     rf                  ; byte from first number
-           sm                          ; subtract
-           lbnf    sortsdns            ; jump if need swap
-           lbnz    sortsdno            ; done if not equal
-           dec     re                  ; decrement count
-           glo     re                  ; get count
-           lbnz    sortsdl1            ; jump if more to check
-sortsdno:  pop     rd                  ; recover positions
-           pop     rf
-           lbr     sortsd4             ; and then move on
-sortsdns:  pop     rd                  ; recover positions
-           pop     rf
-           ldi     1                   ; signal a swap happened
-           plo     r7
-           sep     scall               ; swap the two entries
-           dw      swap
-sortsd4:   mov     rf,rd               ; point first to second
-           glo     rd                  ; add 30 to second
-           adi     30
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           lbr     sortsd2             ; loop to check next entry
-sortsd3:   glo     r7                  ; get flag
-           lbnz    sortsd              ; jump if entries were changed
-           sep     sret                ; otherwise return to caller
+            db    'See github/dmadole/MiniDOS-dir for more information',0
 
-; ***********************************
-; *** Sort list by date ascending ***
-; ***********************************
-sortda:    mov     rf,dirents          ; point to dirents storage
-           ldn     rf                  ; get byte
-           lbz     return              ; no sort if no entries
-           mov     rd,dirents+30       ; point to second entry
-           ldn     rd                  ; get byte
-           lbz     return              ; return if only 1 entry
-sortda1:   ldi     0                   ; zero flag
-           plo     r7                  ; store it
-sortda2:   ldn     rd                  ; get byte from next entry
-           lbz     sortda3             ; jump if end of list
-           push    rf                  ; save indexes
-           push    rd
-           glo     rf                  ; point to date field
-           adi     22
-           plo     rf
-           ghi     rf
-           adci    0
-           phi     rf
-           glo     rd                  ; point to date field
-           adi     22
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           ldi     2                   ; need to compare 2 bytes
-           plo     re
-sortdal1:  lda     rd                  ; get second number
-           str     r2                  ; store for subtract
-           lda     rf                  ; byte from first number
-           sd                          ; subtract
-           lbnf    sortdans            ; jump if need swap
-           lbnz    sortdano            ; not zero means done
-           dec     re                  ; decrement count
-           glo     re                  ; get count
-           lbnz    sortdal1            ; jump if more to check
-sortdano:  pop     rd                  ; recover positions
-           pop     rf
-           lbr     sortda4             ; and then move on
-sortdans:  pop     rd                  ; recover positions
-           pop     rf
-           ldi     1                   ; signal a swap happened
-           plo     r7
-           sep     scall               ; swap the two entries
-           dw      swap
-sortda4:   mov     rf,rd               ; point first to second
-           glo     rd                  ; add 30 to second
-           adi     30
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           lbr     sortda2             ; loop to check next entry
-sortda3:   glo     r7                  ; get flag
-           lbnz    sortda              ; jump if entries were changed
-           sep     sret                ; otherwise return to caller
 
-; ************************************
-; *** Sort list by size descending ***
-; ************************************
-sortdd:    mov     rf,dirents          ; point to dirents storage
-           ldn     rf                  ; get byte
-           lbz     return              ; no sort if no entries
-           mov     rd,dirents+30       ; point to second entry
-           ldn     rd                  ; get byte
-           lbz     return              ; return if only 1 entry
-sortdd1:   ldi     0                   ; zero flag
-           plo     r7                  ; store it
-sortdd2:   ldn     rd                  ; get byte from next entry
-           lbz     sortdd3             ; jump if end of list
-           push    rf                  ; save indexes
-           push    rd
-           glo     rf                  ; point to size field
-           adi     22
-           plo     rf
-           ghi     rf
-           adci    0
-           phi     rf
-           glo     rd                  ; point to size field
-           adi     22
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           ldi     2                   ; need to compare 2 bytes
-           plo     re
-sortddl1:  lda     rd                  ; get second number
-           str     r2                  ; store for subtract
-           lda     rf                  ; byte from first number
-           sm                          ; subtract
-           lbnf    sortddns            ; jump if need swap
-           lbnz    sortddno            ; done if not equal
-           dec     re                  ; decrement count
-           glo     re                  ; get count
-           lbnz    sortddl1            ; jump if more to check
-sortddno:  pop     rd                  ; recover positions
-           pop     rf
-           lbr     sortdd4             ; and then move on
-sortddns:  pop     rd                  ; recover positions
-           pop     rf
-           ldi     1                   ; signal a swap happened
-           plo     r7
-           sep     scall               ; swap the two entries
-           dw      swap
-sortdd4:   mov     rf,rd               ; point first to second
-           glo     rd                  ; add 30 to second
-           adi     30
-           plo     rd
-           ghi     rd
-           adci    0
-           phi     rd
-           lbr     sortdd2             ; loop to check next entry
-sortdd3:   glo     r7                  ; get flag
-           lbnz    sortdd              ; jump if entries were changed
-           sep     sret                ; otherwise return to caller
+skipini:    lda   ra                    ; skip any leading spaces
+            lbz   nullarg
+            sdi   ' '
+            lbdf  skipini
 
-; **********************************
-; *** Swap two directory entries ***
-; **********************************
-swap:      push    rf                  ; save indexes
-           push    rd
-           ldi     30                  ; 30 bytes to swap
-           plo     re
-swaplp:    ldn     rf                  ; get byte from first
-           str     r2                  ; save it
-           ldn     rd                  ; get byte from second
-           str     rf                  ; store into first
-           ldn     r2                  ; recover first one
-           str     rd                  ; byte is now swapped
-           inc     rd
-           inc     rf
-           dec     re                  ; decrement count
-           glo     re                  ; see if done
-           lbnz    swaplp              ; loop until done
-           pop     rd                  ; recover indexes
-           pop     rf
-           sep     sret                ; return to caller
+            sdi   ' '-'-'               ; a dash starts an option
+            lbnz  notdash
+
+            lda   ra                    ; the v option is for verbose
+            smi   'l'
+            lbnz  dousage
+
+            ldi   options.1
+            phi   rb
+            ldi   options.0
+            plo   rb
+
+            ldn   rb                    ; set the flag for verbose
+            ori   1
+            str   rb
+
+            lda   ra                    ; make sure a space follows
+            lbz   nullarg
+            sdi   ' '
+            lbdf  skipini
+
+            lbr   dousage               ; if not then error
+
+
+          ; If not an option, then it is the source path name.
+
+notdash:    dec   ra                    ; back up to first char
+
+            ghi   ra                    ; switch to rf
+            phi   rf
+            glo   ra
+            plo   rf
+
+            ldi   srcname.1             ; pointer to file name
+            phi   ra
+            ldi   srcname.0
+            plo   ra
+ 
+copysrc:    lda   rf                    ; done if end of name
+            lbz   endargs
+
+            str   ra                    ; else copy until end
+            inc   ra
+            sdi   ' '
+            lbnf  copysrc
+
+            dec   ra                    ; back to first space
+
+skipend:    lda   rf
+            lbz   endargs
+            sdi   ' '
+            lbdf  skipend
+
+dousage:    sep   scall
+            dw    o_inmsg
+            db    'USAGE: dir [-l] [path]',13,10,0
+
+return:     sep   sret
+
+
+          ; If a path name argument was not provided, then get the current
+          ; directory from Elf/OS.
+
+nullarg:    ldi   srcname.1             ; pointer to path storage
+            phi   ra
+            phi   rf
+            ldi   srcname.0
+            plo   ra
+            plo   rf
+
+            ldi   0                     ; make null string
+            str   rf
+
+            sep   scall                 ; get current directory
+            dw    o_chdir
+
+skipcwd:    lda   ra                    ; skip to end
+            lbnz  skipcwd
+
+            dec   ra                    ; back to terminator
+
+
+          ; If the source path does not end in a slash then add one so that
+          ; opendir tries to open the path as a directory. Leave RA pointing
+          ; to the slash, not the terminator so we know that we added it.
+
+endargs:    str   ra                    ; terminate path name
+
+            dec   ra                    ; if already a slash do nothing
+            lda   ra
+            smi   '/'
+            lbz   slashed
+
+            ldi   '/'                   ; else add a slash
+            str   ra
+            inc   ra
+
+            ldi   0                     ; terminate path name
+            str   ra
+
+slashed:    ldi   source.1
+            phi   rd
+            ldi   source.0
+            plo   rd
+
+            ldi   srcname.1
+            phi   rf
+            ldi   srcname.0
+            plo   rf
+
+            ldi   16
+            plo   r7
+
+            sep   scall
+            dw    opendir
+            lbnf  destdir
+
+
+            ldn   ra
+            lbnz  unslash
+
+            sep   scall
+            dw    o_inmsg
+            db    'ERROR: path is not directory',13,10,0
+
+            sep   sret
+
+unslash:    ldi   0
+            str   ra
+
+            sep   sret
 
 
 
 
 
-; ***** old code to be removed *****
-           ldi     low buffer          ; point to filename
-           adi     12
-           plo     rf
-           plo     r8                  ; make a copy here
-           ldi     high buffer
-           adci    0
-           phi     rf
-           phi     r8
-           ldi     0                   ; need to find size
-           plo     r9
-size_lp:   lda     r8                  ; load next byte
-           bz      size_dn             ; jump if found end
-           inc     r9                  ; increment count
-           inc     r7                  ; and terminal position
-           lbr     size_lp             ; keep going til end found
-size_dn:   inc     r9                  ; accomodate a trailing space
-           glo     r7                  ; get terminal position
-           smi     79                  ; see if off end
-           lbnf    size_ok             ; jump if not
-           sep     scall               ; move to next line
-           dw      docrlf
-           glo     r9                  ; get size of next entry
-           plo     r7                  ; new terminal size
-size_ok:   sep     scall               ; display the name
-           dw      o_msg
-           ldi     low buffer          ; point to flags
-           adi     6
-           plo     rf
-           ldi     high buffer
-           adci    0
-           phi     rf
-           ldn     rf                  ; get flags
-           ani     1                   ; see if entry is a directory
-           bz      notdir              ; jump if not
-           ldi     '/'                 ; indicate a dir
-           sep     scall
-           dw      o_type
-           inc     r7                  ; accomodate the /
-notdir:    ldi     ' '                 ; trailing space
-           sep     scall
-           dw      o_type
-           inc     r7                  ; increment terminal position
-           glo     r7                  ; see if at end
-           smi     79
-           lbnf    term_lp             ; jump if not
-           sep     scall               ; perform a cr/lf
-           dw      docrlf
-           ldi     0                   ; set new terminal width
-           plo     r7
-           lbr     dirloop             ; loop back for next entry
-term_lp:   glo     r7                  ; get terminal width
-           ani     15                  ; uses 16 as tabstop
-           bnz     notdir              ; jump if not at tabstop
-           ldn     rb                  ; get mode
-           bnz     long                ; jump if long mode
-           lbr     dirloop             ; loop for next entry
-long:      ldi     low buffer          ; point to directory entry
-           adi     7                   ; date field
-           plo     ra
-           ldi     high buffer
-           adci    0                   ; propagate carry
-           phi     ra
-           ldi     high buffer2        ; point to conversion buffer
-           phi     rf
-           ldi     low buffer2
-           plo     rf
-           sep     scall               ; convert the date/time
-           dw      datetime
-           ldi     high buffer2        ; point to conversion buffer
-           phi     rf
-           ldi     low buffer2
-           plo     rf
-           sep     scall               ; display it
-           dw      o_msg
+destdir:    ldi   end.1                 ; pointer to memory for entries
+            phi   r7
+            ldi   end.0
+            plo   r7
+
+            ldi   k_heap.1              ; get start of heap pointer
+            phi   rf
+            ldi   k_heap.0
+            plo   rf
+
+            lda   rf                    ; will build index downward
+            phi   r8
+            ldn   rf
+            plo   r8
+
+            ldi   0                     ; zero count
+            phi   r9
+            plo   r9
+
+            ldi   source.1
+            phi   rd
+            ldi   source.0
+            plo   rd
+
+            ldi   0                     ; size of directory entry
+            phi   rc
+            ldi   32
+            plo   rc
+
+nextent:    ghi   r7                    ; next free memory
+            phi   rf
+            glo   r7
+            plo   rf
+
+            sep   scall                 ; read the entry
+            dw    o_read
+            lbdf  inpfail
+
+            glo   rc                    ; if less than 30 bytes then done
+            smi   32
+            lbnf  lastdir
+
+            ghi   r7                    ; pointer into entry
+            phi   rf
+            glo   r7
+            plo   rf
+
+            inc   rf
+            inc   rf
+
+            lda   rf                    ; if au is zero then skip
+            lbnz  entused
+            ldn   rf
+            lbz   nextent
+
+entused:    glo   r7                    ; move memory pointer to name
+            adi   12
+            plo   r7
+            ghi   r7
+            adci  0
+            phi   r7
+
+            ghi   r7                    ; add pointer to list
+            dec   r8
+            str   r8
+            glo   r7
+            dec   r8
+            str   r8
+
+skipnam:    lda   r7                    ; skip over name
+            lbnz  skipnam
+
+            inc   r9                    ; increment count of entries
+
+            lbr   nextent               ; process next entry
 
 
-           inc     rb                  ; point to size flag
-           ldn     rb                  ; retrieve it
-           dec     rb                  ; put rb back
-           lbz     do_crlf             ; loop back if no size requested
+
+          ; If the list is empty then there is nothing to do, just exit.
+
+lastdir:    glo   r9
+            lbnz  notzero
+            ghi   r9
+            lbz   return
 
 
-; ************************
-; *** Get size of file ***
-; *** Returns R8:R7    ***
-; ************************
-getsize:   mov     rf,buffer           ; point to directory entry buffer
-           inc     rf                  ; point to starting lump
-           inc     rf
-           lda     rf                  ; get starting lump
-           phi     ra
-           ldn     rf
-           plo     ra
-           ldi     0                   ; setup count
-           phi     rc
-           plo     rc
-sz_loop:   sep     scall               ; read value of lump
-           dw      o_rdlump
-           ghi     ra                  ; check for end of chain
-           smi     0feh
-           lbnz    not_end             ; jump if not
-           glo     ra                  ; check low byte as well
-           smi     0feh
-           lbz     sz_done             ; jump if found end
-not_end:   inc     rc                  ; increment lump count
-           lbr     sz_loop             ; and keep looking
-sz_done:   ldi     0                   ; setup final size
-           plo     r7
-           phi     r8
-           glo     rc
-           phi     r7
-           ghi     rc
-           plo     r8                  ; R8:R7 now has AUs*256 bytes
-           ghi     r7                  ; AU * 512 bytes
-           shl
-           phi     r7
-           glo     r8
-           shlc
-           plo     r8
-           ghi     r8
-           shlc
-           phi     r8                  ; R8:R7 now has size minus EOF position
-           ghi     r7                  ; AU * 1024 bytes
-           shl
-           phi     r7
-           glo     r8
-           shlc
-           plo     r8
-           ghi     r8
-           shlc
-           phi     r8                  ; R8:R7 now has size minus EOF position
-           ghi     r7                  ; AU * 2048 bytes
-           shl
-           phi     r7
-           glo     r8
-           shlc
-           plo     r8
-           ghi     r8
-           shlc
-           phi     r8                  ; R8:R7 now has size minus EOF position
-           ghi     r7                  ; AU * 4096 bytes
-           shl
-           phi     r7
-           glo     r8
-           shlc
-           plo     r8
-           ghi     r8
-           shlc
-           phi     r8                  ; R8:R7 now has size minus EOF position
-           mov     rf,buffer+5         ; point to EOF lsb
-           ldn     rf                  ; get EOF lsb
-           str     r2                  ; store for add
-           glo     r7
-           add
-           plo     r7
-           dec     rf                  ; point to EOF msb
-           ldn     rf                  ; add it in
-           str     r2
-           ghi     r7
-           adc
-           phi     r7
-           glo     r8                  ; propagate carry
-           adci    0
-           plo     r8
-           ghi     r8
-           adci    0
-           phi     r8
-           sep     sret                ; return size to caller
-       
-do_crlf:   ldi     high crlf           ; point to crlf
-           phi     rf
-           ldi     low crlf
-           plo     rf
-           sep     scall               ; display it
-           dw      o_msg
-           ldi     0                   ; set new terminal width
-           plo     r7
-           lbr     dirloop             ; to next entry
-docrlf:    glo     rf                  ; save rf
-           stxd
-           ghi     rf
-           stxd
-           ldi     high crlf           ; ponit to cr/lf
-           phi     rf
-           ldi     low crlf
-           plo     rf
-           sep     scall               ; display it
-           dw      o_msg
-           irx                         ; recover original rf
-           ldxa
-           phi     rf
-           ldx
-           plo     rf
-           sep     sret                ; and return
+          ; Else setup for the sort by taking a copy of the count of items
+          ; into R7 which will be the count of the unsorted prefix of the
+          ; list. Change X to RD for use in the comparison inner loop.
 
-; ****************************************************
-; *** Output 2 digit decimal number with leading 0 ***
-; *** D - value to output                          ***
-; *** RF - buffer to write value to                ***
-; ****************************************************
-intout2:   str     r2                  ; save value for a moment
-           ldi     0                   ; setup count
-           plo     re
-           ldn     r2                  ; retrieve it
-intout2lp: smi     10                  ; subtract 10
-           lbnf    intout2go           ; jump if too small
-           inc     re                  ; increment tens
-           lbr     intout2lp           ; and keep looking
-intout2go: adi     10                  ; make positive again
-           str     r2                  ; save units
-           glo     re                  ; get tens
-           adi     '0'                 ; convert to ascii
-           str     rf                  ; store into buffer
-           inc     rf
-           ldn     r2                  ; recover units
-           adi     '0'                 ; convert to ascii
-           str     rf                  ; and store into buffer
-           inc     rf
-           sep     sret                ; return to caller
+notzero:    sep   scall                 ; output a separator line
+            dw    o_inmsg
+            db    13,10,0
 
-; ***********************************************
-; *** Display date/time from descriptor entry ***
-; *** RA - pointer to packed date/time        ***
-; *** RF - where to put it                    ***
-; ***********************************************
-datetime:  glo     rd                  ; save consumed register
-           stxd
-           ghi     rd
-           stxd
-           lda     ra                  ; get year/month
-           shr                         ; shift high month bit into DF
-           ldn     ra                  ; get low bits of month
-           shrc                        ; shift high bit in
-           shr                         ; then shift into position
-           shr
-           shr
-           shr
-           sep     scall               ; convert month output
-           dw      intout2
-           ldi     '/'                 ; need a slash
-           str     rf                  ; place into output
-           inc     rf
-           ldn     ra                  ; recover day
-           ani     01fh                ; mask for day
-           sep     scall               ; convert month output
-           dw      intout2
-           ldi     '/'                 ; need a slash
-           str     rf                  ; place into output
-           inc     rf
-           dec     ra                  ; point back to year
-           lda     ra                  ; get year
-           shr                         ; shift out high bit of month
-           adi     180                 ; add in 1970
-           plo     rd                  ; put in RD for conversion
-           ldi     0                   ; need zero
-           adci    7                   ; propagate carry
-           phi     rd
-           sep     scall               ; conver it 
-           dw      f_uintout
-           ldi     ' '                 ; need a space
-           str     rf                  ; place into output
-           inc     rf
-           inc     ra                  ; point to time
-           ldn     ra                  ; retrieve hours
-           shr                         ; shift to proper position
-           shr
-           shr
-           sep     scall               ; output it
-           dw      intout2
-           ldi     ':'                 ; need a colon
-           str     rf                  ; place into output
-           inc     rf
-           lda     ra                  ; get minutes
-           ani     07h                 ; strip out hours
-           shl                         ; shift to needed spot
-           shl
-           shl
-           str     r2                  ; save for combination
-           ldn     ra                  ; get low bits of minutes
-           shr                         ; shift into position
-           shr
-           shr
-           shr
-           shr
-           or                          ; combine with high bites
-           sep     scall               ; output it
-           dw      intout2
-           ldi     ':'                 ; need a colon
-           str     rf                  ; place into output
-           inc     rf
-           ldn     ra                  ; get seconds
-           ani     1fh                 ; strip minutes out
-           shl                         ; multiply by 2
-           sep     scall               ; output it
-           dw      intout2
-           ldi     ' '                 ; need a space
-           str     rf                  ; place into output
-           inc     rf
-           ldi     ' '                 ; need a space
-           str     rf                  ; place into output
-           inc     rf
-           ldi     0                   ; need terminator
-           str     rf
-           irx                         ; recover consumed register
-           ldxa
-           phi     rd
-           ldx
-           plo     rd
-           sep     sret                ; and return
+            glo   r9                    ; partion divider size
+            plo   r7
+            ghi   r9
+            phi   r7
 
-; *****************************************
-; ***** Convert R7:R8 to bcd in M[RF] *****
-; *****************************************
-tobcd:     push    rf           ; save address
-           ldi     10           ; 10 bytes to clear
-           plo     re
-tobcdlp1:  ldi     0
-           str     rf           ; store into answer
-           inc     rf
-           dec     re           ; decrement count
-           glo     re           ; get count
-           lbnz    tobcdlp1     ; loop until done
-           pop     rf           ; recover address
-           ldi     32           ; 32 bits to process
-           plo     r9
-tobcdlp2:  ldi     10           ; need to process 5 cells
-           plo     re           ; put into count
-           push    rf           ; save address
-tobcdlp3:  ldn     rf           ; get byte
-           smi     5            ; need to see if 5 or greater
-           lbnf    tobcdlp3a    ; jump if not
-           adi     8            ; add 3 to original number
-           str     rf           ; and put it back
-tobcdlp3a: inc     rf           ; point to next cell
-           dec     re           ; decrement cell count
-           glo     re           ; retrieve count
-           lbnz    tobcdlp3     ; loop back if not done
-           glo     r8           ; start by shifting number to convert
-           shl
-           plo     r8
-           ghi     r8
-           shlc
-           phi     r8
-           glo     r7
-           shlc
-           plo     r7
-           ghi     r7
-           shlc
-           phi     r7
-           shlc                 ; now shift result to bit 3
-           shl
-           shl
-           shl
-           str     rf
-           pop     rf           ; recover address
-           push    rf           ; save address again
-           ldi     10           ; 10 cells to process
-           plo     re
-tobcdlp4:  lda     rf           ; get current cell
-           str     r2           ; save it
-           ldn     rf           ; get next cell
-           shr                  ; shift bit 3 into df
-           shr
-           shr
-           shr
-           ldn     r2           ; recover value for current cell
-           shlc                 ; shift with new bit
-           ani     0fh          ; keep only bottom 4 bits
-           dec     rf           ; point back
-           str     rf           ; store value
-           inc     rf           ; and move to next cell
-           dec     re           ; decrement count
-           glo     re           ; see if done
-           lbnz    tobcdlp4     ; jump if not
-           pop     rf           ; recover address
-           dec     r9           ; decrement bit count
-           glo     r9           ; see if done
-           lbnz    tobcdlp2     ; loop until done
-           sep     sret         ; return to caller
-
-; ***************************************************
-; ***** Print number in R7:R8 as signed integer *****
-; ***************************************************
-itoa:      push    rf           ; save consumed registers
-           push    r8
-           glo     r2           ; make room on stack for buffer
-           smi     11
-           plo     r2
-           ghi     r2
-           smbi    0
-           phi     r2
-           mov     rf,r2        ; RF is output buffer
-           inc     rf
-           ghi     r7           ; get high byte
-           shl                  ; shift bit to DF
-           lbdf    itoan        ; negative number
-itoa1:     sep     scall        ; convert to bcd
-           dw      tobcd
-           mov     rf,r2
-           inc     rf
-           ldi     10
-           plo     r8
-           ldi     9            ; max 9 leading zeros
-           phi     r8
-loop1:     lda     rf
-           lbz     itoaz        ; check leading zeros
-           str     r2           ; save for a moment
-           ldi     0            ; signal no more leading zeros
-           phi     r8
-           ldn     r2           ; recover character
-itoa2:     adi     030h
-           sep     scall
-           dw      o_type
-itoa3:     dec     r8
-           glo     r8
-           lbnz    loop1
-           glo     r2           ; pop work buffer off stack
-           adi     11
-           plo     r2
-           ghi     r2
-           adci    0
-           phi     r2
-           pop     r8           ; recover consumed registers
-           pop     rf
-           sep     sret         ; return to caller
-itoaz:     ghi     r8           ; see if leading have been used up
-           lbz     itoa2        ; jump if so
-           smi     1            ; decrement count
-           phi     r8
-           lbr     itoa3        ; and loop for next character
-itoan:     ldi     '-'          ; show negative
-           sep     scall
-           dw      o_type
-           glo     r8           ; 2s compliment
-           xri     0ffh
-           adi     1
-           plo     r8
-           ghi     r8
-           xri     0ffh
-           adci    0
-           phi     r8
-           glo     r7
-           xri     0ffh
-           adci    0
-           plo     r7
-           ghi     r7
-           xri     0ffh
-           adci    0
-           phi     r7
-           lbr     itoa1        ; now convert/show number
+            sex   rd                    ; for sm in name comparison
 
 
-crlf:      db      10,13,0
-mode:      db      0
-size:      db      0
-next:      dw      0                   ; where to store dirents pointer
+          ; Perform one pass of the selection sort. Drop the partition point
+          ; down by one on each pass, if there is no unsorted part left then
+          ; we are done (also if we only had one item to start with).
 
-endrom:    equ     $
+onepass:    dec   r7                    ; compare one fewer than length
 
-.suppress
+            glo   r7                    ; if no comparisons then done
+            bnz   gotmore
+            ghi   r7
+            bz    display
 
-buffer:    ds      32
-buffer2:   ds      64
-dirents:   db      0
 
-           end     begin
+          ; Take a copy of the partition point to use to count entries as
+          ; we scan through and compare them.
 
+gotmore:    ghi   r7                    ; copy count of unsorted entries
+            phi   rc
+            glo   r7
+            plo   rc
+
+            ghi   r8                    ; start largest at first item
+            phi   rb
+            glo   r8
+            plo   rb
+
+            inc   rb                    ; advance to second byte
+
+
+          ; This sets the highest value pointer to the current pointer, which
+          ; is done both at the start of the pass, and also any time a new
+          ; highest value is found (except if it's the very last comparison).
+
+largest:    ghi   rb                    ; update largest to current
+            phi   ra
+            glo   rb
+            plo   ra
+
+
+          ; The loop returns back to here when a new highest value is not
+          ; found, in which case we simply advance to the next candidate.
+
+sortent:    dec   ra                    ; keep largest, advance current
+            inc   rb
+
+            lda   ra                    ; get pointer to largest name
+            plo   rd
+            ldn   ra
+            phi   rd
+
+            lda   rb                    ; get pointer to current name
+            plo   rf
+            ldn   rb
+            phi   rf
+
+            dec   rc                    ; decrement count
+
+
+          ; Compare the names of the highest yet found and the current item.
+          ; Assume there are no duplicates since these are directory entries.
+
+cmpname:    lda   rf                    ; if end of rf then no swap
+            bz    skipent
+
+            sm                          ; if rf is less then no swap
+            bnf   skipent
+
+            inc   rd                    ; if same then keep comparing
+            bz    cmpname
+
+
+          ; The current item is higher than the last highest item. If this
+          ; is already the last item in the list then end this pass, else
+          ; remember this as the new highest item this pass and continue.
+
+            glo   rc                    ; if not last then update current
+            bnz   largest
+            ghi   rc
+            bnz   largest
+
+            br    onepass               ; otherwise just start a new pass
+
+
+          ; If the current item is not larger than the highest seen yet,
+          ; check the next item unless we are at the end of the list.
+
+skipent:    glo   rc                    ; if not last keep checking
+            bnz   sortent
+            ghi   rc
+            bnz   sortent
+
+
+          ; If we completed a pass then swap the highest found with the
+          ; last item, which will decrease the unsorted part by one entry.
+
+            ldn   ra                    ; swap the second entry bytes
+            str   r2
+            ldn   rb
+            str   ra
+            ldn   r2
+            str   rb
+
+            dec   ra                    ; point to first byte
+            dec   rb
+
+            ldn   ra                    ; swap the first entry bytes
+            str   r2
+            ldn   rb
+            str   ra
+            ldn   r2
+            str   rb
+
+            br    onepass               ; and start a new loop
+
+
+
+
+
+
+
+
+
+
+
+display:    ldi   options.1
+            phi   rb
+            ldi   options.0
+            plo   rb
+
+            ldn   rb                   ; for long form display
+            ani   1
+            lbnz  longopt
+
+            ldi   3                    ; column counter default
+            phi   rc
+
+            ghi   r9                   ; default if more than 256
+            bnz   above4
+
+            glo   r9                   ; default if more than 3
+            smi   4
+            lbdf  above4
+
+            adi   3                    ; else entries in last row
+            phi   rc
+
+
+
+above4:     ldi   buffer.1             ; pointer to output buffer
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+
+
+notlast:    lda   r8                   ; pointers to name and flags
+            plo   rb
+            smi   6
+            plo   rd
+            lda   r8
+            phi   rb
+            smbi  0
+            phi   rd
+
+            ldi   20                   ; column width in characters
+            plo   rc
+
+colsize:    lda   rb                   ; subtract length of name
+            str   rf
+            inc   rf
+            dec   rc
+            bnz   colsize
+
+            dec   rf                   ; adjust for zeroterminator
+            inc   rc
+
+
+
+            ldn   rd                   ; if not directory flag set
+            shr
+            lbnf  nodirec
+
+            ldi   '/'                  ; else output slash to buffer
+            str   rf
+
+            inc   rf                   ; adjust pointer and count
+            dec   rc                  
+
+
+
+
+
+nodirec:    dec   r9                   ; decrement entry count
+
+            ghi   rc                   ; end of line if last column
+            lbz   newline
+
+
+padname:    glo   rc                   ; if end of column width
+            lbz   notline
+
+            ldi   ' '                  ; pad with spaces to column width
+            str   rf
+            inc   rf
+            dec   rc
+            lbr   padname
+
+
+notline:    dec   rc                   ; decrement column in msb
+
+            lbr   notlast              ; output next column
+
+
+newline:    ldi   13                   ; add carriage return to buffer
+            str   rf
+            inc   rf
+
+            ldi   10                   ; add line feed to buffer
+            str   rf
+            inc   rf
+
+            ldi   0                    ; add terminator
+            str   rf
+
+            ldi   buffer.1             ; pointer back to beginning
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+            sep   scall                ; output buffer
+            dw    o_msg
+
+
+
+            glo   r9                   ; continue if not end of names
+            lbnz  display
+            ghi   r9
+            lbnz  display
+
+            sep   sret                 ; when done then exit
+
+
+
+longopt:    lda   r8
+            plo   ra
+            smi   6
+            plo   rb
+            lda   r8
+            phi   ra
+            smbi  0
+            phi   rb
+
+            ldi   buffer.1
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+            ldi   20
+            plo   rc
+
+copynam:    lda   ra
+            str   rf
+            inc   rf
+            dec   rc
+            lbnz  copynam
+
+            dec   rf
+            inc   rc
+
+            ldn   rb                   ; if not directory flag set
+            ani   1
+            lbz   notadir
+
+            ldi   '/'                  ; else output slash to buffer
+            str   rf
+
+            inc   rf                   ; adjust pointer and count
+            dec   rc                  
+
+notadir:    glo   rc
+            lbz   endpads
+
+            ldi   ' '
+            str   rf
+            inc   rf
+
+            dec   rc
+            lbr   notadir
+
+endpads:    ldn   rb
+            ani   2
+            lbz   notexec
+
+            ldi   '*'
+            str   rf
+            inc   rf
+
+            lbr   isaexec
+
+notexec:    ldi   ' '
+            str   rf
+            inc   rf
+
+isaexec:    ldi   ' '
+            str   rf
+            inc   rf
+
+
+            inc   rb
+
+            lda   rb
+            shr
+            plo   rd
+
+            ldn   rb
+            shrc
+            shr
+            shr
+            shr
+            shr
+
+            sep   scall
+            dw    dateint
+
+            ldi   '/'
+            str   rf
+            inc   rf
+
+            lda   rb
+            ani   31
+
+            sep   scall
+            dw    dateint
+
+            ldi   '/'
+            str   rf
+            inc   rf
+
+            glo   rd
+            smi   100-72
+            lbdf  year20c
+
+            ldi   '1'
+            str   rf
+            inc   rf
+
+            ldi   '9'
+            str   rf
+            inc   rf
+
+            glo   rd
+            adi   72
+
+            lbr   year19c
+
+year20c:    ldi   '2'
+            str   rf
+            inc   rf
+
+            ldi   '0'
+            str   rf
+            inc   rf
+
+            glo   rd
+            smi   100-72
+            
+year19c:    sep   scall
+            dw    dateint
+
+            ldi   ' '
+            str   rf
+            inc   rf
+
+            ldn   rb
+            shr
+            shr
+            shr
+
+            sep   scall
+            dw    dateint
+
+            ldi   ':'
+            str   rf
+            inc   rf
+
+            lda   rb
+            shl
+            shl
+            shl
+            str   r2
+
+            ldn   rb
+            shr
+            shr
+            shr
+            shr
+            shr
+            add
+            ani   63
+
+            sep   scall
+            dw    dateint
+            
+            ldi   ':'
+            str   rf
+            inc   rf
+
+            ldn   rb
+            shl
+            ani   63
+
+            sep   scall
+            dw    dateint
+
+            ldi   ' '
+            str   rf
+            inc   rf
+
+            str   rf
+            inc   rf
+
+
+
+
+            glo   rb
+            smi   8
+            plo   rb
+            ghi   rb
+            smbi   0
+            phi   rb
+
+            ghi   r8
+            stxd
+
+            ldi   (source+9).1
+            phi   ra
+            ldi   (source+9).0
+            plo   ra
+
+            ldn   ra
+            phi   r8
+
+            lda   rb
+            phi   ra
+            lda   rb
+            plo   ra
+
+            lda   rb
+            phi   rd
+            lda   rb
+            plo   rd
+
+            ldi   -1
+            phi   rc
+            plo   rc
+
+getsize:    inc   rc
+
+            sep   scall
+            dw    o_rdlump
+
+            ghi   ra
+            smi   0feh
+            lbnz  getsize
+
+            glo   ra
+            smi   0feh
+            lbnz  getsize
+
+            ghi   rd
+            str   r2
+
+            ldi   4
+            plo   re
+
+shifter:    ghi   rc
+            shr
+            phi   rc
+            glo   rc
+            shrc
+            plo   rc
+            ghi   rd
+            shrc
+            phi   rd
+
+            dec   re
+            glo   re
+            lbnz  shifter
+
+            ghi   rd
+            or
+            phi   rd
+
+            sep   scall
+            dw    i2along
+
+
+endlong:    irx
+            ldx
+            phi   r8
+
+            ldi   13
+            str   rf
+            inc   rf
+
+            ldi   10
+            str   rf
+            inc   rf
+
+            ldi   0
+            str   rf
+
+            ldi   buffer.1
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+            sep   scall
+            dw    o_msg
+
+            dec   r9
+
+            glo   r9
+            lbnz  longopt
+            ghi   r9
+            lbnz  longopt
+
+            sep   sret
+
+
+
+
+i2along:    ldi   divisor.1
+            phi   ra
+            ldi   divisor.0
+            plo   ra
+
+            sex   ra
+
+            ldi   -1
+            plo   rb
+
+i2adivi:    inc   rb
+
+i2aloop:    glo   rd
+            sm
+            plo   rd
+            dec   ra
+            ghi   rd
+            smb
+            phi   rd
+            dec   ra
+            glo   rc
+            smb
+            plo   rc
+
+            inc   ra
+            inc   ra
+
+            lbdf  i2adivi
+
+            glo   rd
+            add 
+            plo   rd
+            dec   ra
+            ghi   rd
+            adc
+            phi   rd
+            dec   ra
+            glo   rc
+            adc
+            plo   rc
+
+            glo   rb
+            lbz   i2askip
+
+            ori   '0'
+            str   rf
+            inc   rf
+
+            ldi   '0'
+            plo   rb
+
+i2askip:    dec   ra
+            ldn   ra
+            lbnz  i2aloop
+
+            glo   rd
+            adi   '0'
+
+            str   rf
+            inc   rf
+
+            sep   sret
+
+            db    0
+            db    0,0,10
+            db    0,0,100
+            db    0,3,232
+            db    0,39,16
+            db    1,134,160
+            db    15,66,64
+            db    152,150,128
+
+divisor:    equ   $-1
+
+
+
+          ; A fast, simple integer to ASCII conversion for outputting the
+          ; dates. This always outputs two digits, with leading zeroes.
+          ; The input value is in D and the output is written at RF.
+
+dateint:    str   r2                    ; save input value
+
+            ldi   '0'-1                 ; for tens digit
+            plo   re
+
+            ldn   r2                    ; recover input value
+
+intloop:    smi   10                    ; count tens
+            inc   re
+            lbdf  intloop
+
+            str   r2                    ; save underflowed result
+
+            glo   re                    ; put tens digit to output
+            str   rf
+            inc   rf
+
+            ldn   r2                    ; recover underflow
+
+            adi   '0'+10                ; convert to digit and output
+            str   rf
+            inc   rf
+
+            sep   sret                  ; return
+
+
+
+inpfail:    sep   scall
+            dw    o_inmsg
+            db    'failed',13,10,0
+
+            sep   sret
+
+
+
+          ; ------------------------------------------------------------------
+          ; The o_open call can't open the root directory, but o_opendir can,
+          ; however on Elf/OS 4 it returns a system filedescriptor that will
+          ; be overwritten when opening the next file. So we call o_opendir
+          ; but then create a copy of the file descriptor in that case.
+
+opendir:    glo   rd                    ; save the passed descriptor
+            stxd
+            ghi   rd
+            stxd
+
+            glo   ra                    ; in elf/os 4 opendir trashes ra
+            stxd
+            ghi   ra
+            stxd
+
+            glo   r9                    ; and also r9
+            stxd
+            ghi   r9
+            stxd
+
+            sep   scall                 ; open the directory
+            dw    o_opendir
+
+            irx                         ; restore original r9
+            ldxa
+            phi   r9
+            ldxa
+            plo   r9
+
+            ldxa                        ; and ra
+            phi   ra
+            ldxa
+            plo   ra
+
+
+          ; If opendir failed then no need to copy the descriptor, just 
+          ; restore the original RD and return.
+
+            lbnf  success               ; did opendir succeed?
+
+            ldxa                        ; if not restore original rd
+            phi   rd
+            ldx
+            plo   rd
+
+            sep   sret                  ; and return
+
+
+          ; If RD did not change, then opendir might have failed, or it may
+          ; have succeeded on a later version of Elf/OS that uses the passed
+          ; descriptor rather than a system descriptor. Either way, return.
+
+success:    ghi   rd                    ; see if rd changed
+            xor
+            lbnz  changed
+
+            irx                         ; if not, don't copy fildes
+            sep   sret
+
+
+          ; Otherwise, we opened the directory, but have been returned a 
+          ; pointer to a system file descriptor. Copy it before returning.
+
+changed:    ldxa                        ; get saved rd into r9
+            phi   rf
+            ldx
+            plo   rf
+
+            ldi   4                     ; first 4 bytes are offset
+            plo   re
+
+copyfd1:    lda   rd                    ; copy them 
+            str   rf
+            inc   rf
+
+            dec   re                    ; until all 4 complete
+            glo   re
+            lbnz  copyfd1
+
+            lda   rd                    ; next 2 are the dta pointer
+            phi   r7
+            lda   rd
+            plo   r7
+
+            lda   rf                    ; get for source and destination
+            phi   r8
+            lda   rf
+            plo   r8
+
+            ldi   13                    ; remaining byte count in fildes
+            plo   re
+
+copyfd2:    lda   rd                    ; copy remaining bytes
+            str   rf
+            inc   rf
+
+            dec   re                    ; complete to total of 19 bytes
+            glo   re
+            lbnz  copyfd2
+
+            ldi   255                   ; count to copy, mind the msb
+            plo   re
+            inc   re
+
+copydta:    lda   r7                    ; copy two bytes at a time
+            str   r8
+            inc   r8
+            lda   r7
+            str   r8
+            inc   r8
+
+            dec   re                    ; continue until dta copied
+            glo   re
+            lbnz  copydta
+
+            glo   rf                    ; set copy fildes back into rd
+            smi   19
+            plo   rd
+            ghi   rf
+            smbi  0
+            phi   rd
+
+            adi   0                     ; return with df cleared
+            sep   sret
+
+options:    db    0
+
+          ; File descriptor used for both intput and output files.
+
+source:     db    0,0,0,0
+            dw    dta
+            db    0,0,0,0,0,0,0,0,0,0,0,0,0
+
+dirent:     ds    32
+
+srcname:    ds    256
+
+buffer:     ds    256
+
+
+          ; Data transfer area that is included in executable header size
+          ; but not actually included in executable.
+
+dta:        ds    512
+
+end:        end    begin
